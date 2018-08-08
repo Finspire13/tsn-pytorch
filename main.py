@@ -14,6 +14,8 @@ from models import TSN
 from transforms import *
 from opts import parser
 
+import pdb
+
 best_prec1 = 0
 
 
@@ -68,35 +70,41 @@ def main():
     elif args.modality in ['Flow', 'RGBDiff']:
         data_length = 5
 
-    train_loader = torch.utils.data.DataLoader(
-        TSNDataSet("", args.train_list, num_segments=args.num_segments,
-                   new_length=data_length,
-                   modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
-                   transform=torchvision.transforms.Compose([
-                       train_augmentation,
-                       Stack(roll=args.arch == 'BNInception'),
-                       ToTorchFormatTensor(div=args.arch != 'BNInception'),
-                       normalize,
-                   ])),
+    train_dataset = TSNDataSet("", args.train_list, num_segments=args.num_segments,
+        new_length=data_length, modality=args.modality,
+        image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
+        transform=torchvision.transforms.Compose([
+            train_augmentation,
+            Stack(roll=args.arch == 'BNInception'),
+            ToTorchFormatTensor(div=args.arch != 'BNInception'),
+            normalize,
+        ]))
+
+    val_dataset = TSNDataSet("", args.val_list, num_segments=args.num_segments,
+        new_length=data_length,
+        modality=args.modality,
+        image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
+        random_shift=False,
+        transform=torchvision.transforms.Compose([
+            GroupScale(int(scale_size)),
+            GroupCenterCrop(crop_size),
+            Stack(roll=args.arch == 'BNInception'),
+            ToTorchFormatTensor(div=args.arch != 'BNInception'),
+            normalize,
+        ]))
+
+    train_loader = torch.utils.data.DataLoader(train_dataset,
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
-    val_loader = torch.utils.data.DataLoader(
-        TSNDataSet("", args.val_list, num_segments=args.num_segments,
-                   new_length=data_length,
-                   modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix+"{}_{:05d}.jpg",
-                   random_shift=False,
-                   transform=torchvision.transforms.Compose([
-                       GroupScale(int(scale_size)),
-                       GroupCenterCrop(crop_size),
-                       Stack(roll=args.arch == 'BNInception'),
-                       ToTorchFormatTensor(div=args.arch != 'BNInception'),
-                       normalize,
-                   ])),
+    val_loader = torch.utils.data.DataLoader(val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
+
+    # temp = val_dataset[0]
+    # pdb.set_trace()
+
+
 
     # define loss function (criterion) and optimizer
     if args.loss_type == 'nll':
@@ -114,6 +122,7 @@ def main():
                                 weight_decay=args.weight_decay)
 
     if args.evaluate:
+        print('evaluate mode!!')
         validate(val_loader, model, criterion, 0)
         return
 
@@ -154,24 +163,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
+
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
+        input = input.cuda()
+        target = target.cuda(async=True)                    ### Why async??
 
         # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+        output = model(input)
+        loss = criterion(output, target)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1,5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
-
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top5.update(prec5.item(), input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -201,6 +209,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
 
 def validate(val_loader, model, criterion, iter, logger=None):
+
+    print('evaluate!')
+
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -210,37 +221,39 @@ def validate(val_loader, model, criterion, iter, logger=None):
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
 
-        # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+    with torch.no_grad():
+        for i, (input, target) in enumerate(val_loader):
 
-        # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1,5))
+            input = input.cuda()
+            target = target.cuda(async=True)
 
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+            # compute output
+            output = model(input)
+            loss = criterion(output, target)
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+            # measure accuracy and record loss
+            prec1, prec5 = accuracy(output.data, target, topk=(1,5))
 
-        if i % args.print_freq == 0:
-            print(('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                   i, len(val_loader), batch_time=batch_time, loss=losses,
-                   top1=top1, top5=top5)))
+            losses.update(loss.item(), input.size(0))
+            top1.update(prec1.item(), input.size(0))
+            top5.update(prec5.item(), input.size(0))
 
-    print(('Testing Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Loss {loss.avg:.5f}'
-          .format(top1=top1, top5=top5, loss=losses)))
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print(('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                       i, len(val_loader), batch_time=batch_time, loss=losses,
+                       top1=top1, top5=top5)))
+
+        print(('Testing Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Loss {loss.avg:.5f}'
+              .format(top1=top1, top5=top5, loss=losses)))
 
     return top1.avg
 
@@ -273,8 +286,8 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch, lr_steps):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    decay = 0.1 ** (sum(epoch >= np.array(lr_steps)))
-    lr = args.lr * decay
+    lr_decay = 0.1 ** (sum(epoch >= np.array(lr_steps)))
+    lr = args.lr * lr_decay
     decay = args.weight_decay
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr * param_group['lr_mult']

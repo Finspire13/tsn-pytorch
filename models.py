@@ -4,6 +4,8 @@ from ops.basic_ops import ConsensusModule, Identity
 from transforms import *
 from torch.nn.init import normal, constant
 
+import pdb
+
 class TSN(nn.Module):
     def __init__(self, num_class, num_segments, modality,
                  base_model='resnet101', new_length=None,
@@ -41,7 +43,7 @@ TSN Configurations:
         feature_dim = self._prepare_tsn(num_class)
 
         if self.modality == 'Flow':
-            print("Converting the ImageNet model to a flow init model")
+            print("Converting the ImageNet model to a flow init model")        ### NICE
             self.base_model = self._construct_flow_model(self.base_model)
             print("Done. Flow model ready...")
         elif self.modality == 'RGBDiff':
@@ -61,7 +63,7 @@ TSN Configurations:
     def _prepare_tsn(self, num_class):
         feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
         if self.dropout == 0:
-            setattr(self.base_model, self.base_model.last_layer_name, nn.Linear(feature_dim, num_class))
+            setattr(self.base_model, self.base_model.last_layer_name, nn.Linear(feature_dim, num_class))    ### Wow! Nice
             self.new_fc = None
         else:
             setattr(self.base_model, self.base_model.last_layer_name, nn.Dropout(p=self.dropout))
@@ -89,10 +91,16 @@ TSN Configurations:
                 self.input_mean = [0.5]
                 self.input_std = [np.mean(self.input_std)]
             elif self.modality == 'RGBDiff':
-                self.input_mean = [0.485, 0.456, 0.406] + [0] * 3 * self.new_length
+                self.input_mean = [0.485, 0.456, 0.406] + [0] * 3 * self.new_length   ### [0.485, 0.456, 0.406, 0, 0, 0, 0, 0, 0, 0, 0, 0] why ???
                 self.input_std = self.input_std + [np.mean(self.input_std) * 2] * 3 * self.new_length
+
         elif base_model == 'BNInception':
             import tf_model_zoo
+
+
+            # import pdb
+            # pdb.set_trace()
+
             self.base_model = getattr(tf_model_zoo, base_model)()
             self.base_model.last_layer_name = 'fc'
             self.input_size = 224
@@ -101,7 +109,7 @@ TSN Configurations:
 
             if self.modality == 'Flow':
                 self.input_mean = [128]
-            elif self.modality == 'RGBDiff':
+            elif self.modality == 'RGBDiff':                                          ### Why here different??
                 self.input_mean = self.input_mean * (1 + self.new_length)
 
         elif 'inception' in base_model:
@@ -109,7 +117,7 @@ TSN Configurations:
             self.base_model = getattr(tf_model_zoo, base_model)()
             self.base_model.last_layer_name = 'classif'
             self.input_size = 299
-            self.input_mean = [0.5]
+            self.input_mean = [0.5]                                               ### Why here different??
             self.input_std = [0.5]
         else:
             raise ValueError('Unknown base model: {}'.format(base_model))
@@ -188,26 +196,35 @@ TSN Configurations:
         ]
 
     def forward(self, input):
+
+        import pdb 
+        
+
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
 
         if self.modality == 'RGBDiff':
             sample_len = 3 * self.new_length
             input = self._get_diff(input)
 
-        base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
+        base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))  # move seg num to bach dim
 
         if self.dropout > 0:
             base_out = self.new_fc(base_out)
 
         if not self.before_softmax:
-            base_out = self.softmax(base_out)
+            base_out = self.softmax(base_out)  # No softmax by default
+
         if self.reshape:
             base_out = base_out.view((-1, self.num_segments) + base_out.size()[1:])
 
         output = self.consensus(base_out)
-        return output.squeeze(1)
+        return output.squeeze(1)    # batch x class
 
-    def _get_diff(self, input, keep_rgb=False):
+    def _get_diff(self, input, keep_rgb=False):    # Not read yet
+
+        import pdb
+        pd.set_trace()
+
         input_c = 3 if self.modality in ["RGB", "RGBDiff"] else 2
         input_view = input.view((-1, self.num_segments, self.new_length + 1, input_c,) + input.size()[2:])
         if keep_rgb:
@@ -224,7 +241,7 @@ TSN Configurations:
         return new_data
 
 
-    def _construct_flow_model(self, base_model):
+    def _construct_flow_model(self, base_model):   ### Magic
         # modify the convolution layers
         # Torch models are usually defined in a hierarchical way.
         # nn.modules.children() return all sub modules in a DFS manner
@@ -245,7 +262,7 @@ TSN Configurations:
         new_conv.weight.data = new_kernels
         if len(params) == 2:
             new_conv.bias.data = params[1].data # add bias if neccessary
-        layer_name = list(container.state_dict().keys())[0][:-7] # remove .weight suffix to get the layer name
+        layer_name = list(container.state_dict().keys())[0][:-7] # remove .weight suffix to get the layer name    ### Hack
 
         # replace the first convlution layer
         setattr(container, layer_name, new_conv)
@@ -267,7 +284,7 @@ TSN Configurations:
             new_kernel_size = kernel_size[:1] + (3 * self.new_length,) + kernel_size[2:]
             new_kernels = params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()
         else:
-            new_kernel_size = kernel_size[:1] + (3 * self.new_length,) + kernel_size[2:]
+            new_kernel_size = kernel_size[:1] + (3 * self.new_length,) + kernel_size[2:]    ### Why 3* ???
             new_kernels = torch.cat((params[0].data, params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()),
                                     1)
             new_kernel_size = kernel_size[:1] + (3 + 3 * self.new_length,) + kernel_size[2:]

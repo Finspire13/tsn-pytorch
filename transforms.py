@@ -6,6 +6,9 @@ import numbers
 import math
 import torch
 
+import pdb
+
+### Just What I Want For a Long Time!
 
 class GroupRandomCrop(object):
     def __init__(self, size):
@@ -54,7 +57,7 @@ class GroupRandomHorizontalFlip(object):
             ret = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in img_group]
             if self.is_flow:
                 for i in range(0, len(ret), 2):
-                    ret[i] = ImageOps.invert(ret[i])  # invert flow pixel values when flipping
+                    ret[i] = ImageOps.invert(ret[i])  # invert flow pixel values when flipping    ### [X, Y] flow?
             return ret
         else:
             return img_group
@@ -66,8 +69,9 @@ class GroupNormalize(object):
         self.std = std
 
     def __call__(self, tensor):
-        rep_mean = self.mean * (tensor.size()[0]//len(self.mean))
-        rep_std = self.std * (tensor.size()[0]//len(self.std))
+
+        rep_mean = self.mean * (tensor.size()[0]//len(self.mean))  ### How many frames                               ### why size//len
+        rep_std = self.std * (tensor.size()[0]//len(self.std))   ### * Replicate
 
         # TODO: make efficient
         for t, m, s in zip(tensor, rep_mean, rep_std):
@@ -86,7 +90,7 @@ class GroupScale(object):
     """
 
     def __init__(self, size, interpolation=Image.BILINEAR):
-        self.worker = torchvision.transforms.Scale(size, interpolation)
+        self.worker = torchvision.transforms.Resize(size, interpolation)
 
     def __call__(self, img_group):
         return [self.worker(img) for img in img_group]
@@ -117,10 +121,10 @@ class GroupOverSample(object):
             for i, img in enumerate(img_group):
                 crop = img.crop((o_w, o_h, o_w + crop_w, o_h + crop_h))
                 normal_group.append(crop)
-                flip_crop = crop.copy().transpose(Image.FLIP_LEFT_RIGHT)
+                flip_crop = crop.copy().transpose(Image.FLIP_LEFT_RIGHT)  #copy!!
 
                 if img.mode == 'L' and i % 2 == 0:
-                    flip_group.append(ImageOps.invert(flip_crop))
+                    flip_group.append(ImageOps.invert(flip_crop))   # Flow  # X,Y?
                 else:
                     flip_group.append(flip_crop)
 
@@ -178,7 +182,7 @@ class GroupMultiScaleCrop(object):
         return random.choice(offsets)
 
     @staticmethod
-    def fill_fix_offset(more_fix_crop, image_w, image_h, crop_w, crop_h):
+    def fill_fix_offset(more_fix_crop, image_w, image_h, crop_w, crop_h):  # Fixed 5 or 13 crops
         w_step = (image_w - crop_w) // 4
         h_step = (image_h - crop_h) // 4
 
@@ -260,7 +264,7 @@ class Stack(object):
             return np.concatenate([np.expand_dims(x, 2) for x in img_group], axis=2)
         elif img_group[0].mode == 'RGB':
             if self.roll:
-                return np.concatenate([np.array(x)[:, :, ::-1] for x in img_group], axis=2)
+                return np.concatenate([np.array(x)[:, :, ::-1] for x in img_group], axis=2)  # RGB -> BGR
             else:
                 return np.concatenate(img_group, axis=2)
 
@@ -274,7 +278,7 @@ class ToTorchFormatTensor(object):
     def __call__(self, pic):
         if isinstance(pic, np.ndarray):
             # handle numpy array
-            img = torch.from_numpy(pic).permute(2, 0, 1).contiguous()
+            img = torch.from_numpy(pic).permute(2, 0, 1).contiguous()   ### contiguous IN MEMORY
         else:
             # handle PIL Image
             img = torch.ByteTensor(torch.ByteStorage.from_buffer(pic.tobytes()))
@@ -291,7 +295,7 @@ class IdentityTransform(object):
         return data
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  ### Test
     trans = torchvision.transforms.Compose([
         GroupScale(256),
         GroupRandomCrop(224),
@@ -303,7 +307,7 @@ if __name__ == "__main__":
         )]
     )
 
-    im = Image.open('../tensorflow-model-zoo.torch/lena_299.png')
+    im = Image.open('./tf_model_zoo/lena_299.png')
 
     color_group = [im] * 3
     rst = trans(color_group)
@@ -319,4 +323,4 @@ if __name__ == "__main__":
             mean=[.485, .456, .406],
             std=[.229, .224, .225])
     ])
-    print(trans2(color_group))
+    print(trans2(color_group).shape)

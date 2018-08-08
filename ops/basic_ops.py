@@ -7,7 +7,7 @@ class Identity(torch.nn.Module):
         return input
 
 
-class SegmentConsensus(torch.autograd.Function):
+class SegmentConsensus(torch.autograd.Function):      ### Learn how to write functions
 
     def __init__(self, consensus_type, dim=1):
         self.consensus_type = consensus_type

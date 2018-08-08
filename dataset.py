@@ -6,6 +6,8 @@ import os.path
 import numpy as np
 from numpy.random import randint
 
+import pdb
+
 class VideoRecord(object):
     def __init__(self, row):
         self._data = row
@@ -25,9 +27,9 @@ class VideoRecord(object):
 
 class TSNDataSet(data.Dataset):
     def __init__(self, root_path, list_file,
-                 num_segments=3, new_length=1, modality='RGB',
+                 num_segments=3, new_length=1, modality='RGB',          ### What is new length?
                  image_tmpl='img_{:05d}.jpg', transform=None,
-                 force_grayscale=False, random_shift=True, test_mode=False):
+                 random_shift=True, test_mode=False):
 
         self.root_path = root_path
         self.list_file = list_file
@@ -56,9 +58,8 @@ class TSNDataSet(data.Dataset):
     def _parse_list(self):
         self.video_list = [VideoRecord(x.strip().split(' ')) for x in open(self.list_file)]
 
-    def _sample_indices(self, record):
+    def _sample_indices(self, record):   # Take a frame from each segment
         """
-
         :param record: VideoRecord
         :return: list
         """
@@ -70,25 +71,37 @@ class TSNDataSet(data.Dataset):
             offsets = np.sort(randint(record.num_frames - self.new_length + 1, size=self.num_segments))
         else:
             offsets = np.zeros((self.num_segments,))
+            print('Train, too much segments, zero offsets!!')
+
         return offsets + 1
 
-    def _get_val_indices(self, record):
+    def _get_val_indices(self, record):               ## Take a middle frame from each segment 
+
         if record.num_frames > self.num_segments + self.new_length - 1:
-            tick = (record.num_frames - self.new_length + 1) / float(self.num_segments)
+            tick = (record.num_frames - self.new_length + 1) / float(self.num_segments)   # avergae duration
             offsets = np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segments)])
         else:
             offsets = np.zeros((self.num_segments,))
+            print('val, too much segments, zero offsets!!')
+
         return offsets + 1
 
-    def _get_test_indices(self, record):
+    def _get_test_indices(self, record):             ## Take a middle frame from each segment, not handle exception
 
         tick = (record.num_frames - self.new_length + 1) / float(self.num_segments)
-
         offsets = np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segments)])
+
+        if record.num_frames <= self.num_segments + self.new_length - 1:
+            print('test, too much segments')
 
         return offsets + 1
 
     def __getitem__(self, index):
+
+        #print('hahah')
+
+        #pdb.set_trace()  # why can not here (loader)!?
+
         record = self.video_list[index]
 
         if not self.test_mode:
@@ -103,7 +116,7 @@ class TSNDataSet(data.Dataset):
         images = list()
         for seg_ind in indices:
             p = int(seg_ind)
-            for i in range(self.new_length):
+            for i in range(self.new_length):  # if flow take 5 flow images
                 seg_imgs = self._load_image(record.path, p)
                 images.extend(seg_imgs)
                 if p < record.num_frames:
